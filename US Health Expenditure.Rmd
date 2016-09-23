@@ -1,0 +1,537 @@
+---
+title: "US Health Expenditure Analysis"
+author: "Deepti"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r chunk1, echo=FALSE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+
+library(pastecs)
+library(psych )
+library(plyr)
+library(ggplot2)
+library(corrplot)
+library(dummy)
+library(MASS)
+library(car)
+library(lmtest)
+
+health <- read.csv("HealthExpend.csv")
+
+```
+
+The data were from the Medical Expenditure Panel Survey(MEPS). MEPS is a probability survey that provides nationally representative survey estimates of health care use, expenditures, sources of payment, and insurance coverage for the U.S. civilian population. 
+
+##### We will be analysising the parameters which are impacting health expenditure
+
+Looking at the strutcure of data:
+
+```{r, echo=TRUE}
+str(health)
+```
+
+which is summarised as follows:
+
+__Continous Variables:__ There are six continous variables- Age,famsize,countip, expendip, countop, expendop.
+
+__Binary Variables:__ There are eight binary variables- anylimit, college, highsch, gender, mnhjpoor, insure, usc, unemploy, managedcare.
+
+__Categotical Variables:__ There are seven categorical variables- race, region, educ, maristat, income, phstat, indusclass.
+
+Total 2000 observations with 22 variables.
+
+It contains data for both Inpatients and outpatients expenditure, since we are analyzing outpatients expenditure, extracting outpatients data post removing redundant columns for categories. 
+
+```{r chunk2, echo=TRUE}
+
+#removing redundant columns
+
+health <- subset(health, select=-c(ID,RACE1,REGION1,EDUC1,MARISTAT1,INCOME1,PHSTAT1))
+
+InpHealth<- subset(health,COUNTIP>0,select = -c(COUNTOP,EXPENDOP) )
+dim(InpHealth)
+
+OppHealth<- subset(health,COUNTOP>0,select = -c(COUNTIP,EXPENDIP) )
+dim(OppHealth)
+
+```
+
+#### Missing Value Analysis
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+detectmissing <- function(dataframe)
+{
+  cnt<- 0
+  #check number of columns 
+  nocol<- ncol(dataframe)
+  norow<- nrow(dataframe)
+  for (i in 2:nocol)
+  {
+    for (j in 1:norow)
+    {
+      if (dataframe[j,i]=="" | is.na(dataframe[j,i])) 
+      
+      {
+        cnt<-cnt+1
+        
+      }
+    }
+    if (cnt>0)
+    {
+      print(paste("There are missing values",cnt))
+      print(paste("In column",colnames(dataframe[i])))
+    }
+    
+  }
+}  
+
+detectmissing(health)
+
+#Replacing missing values to "Others" in INDUSCLASS
+health$INDUSCLASS <- as.character(health$INDUSCLASS)
+class(health$INDUSCLASS)
+head(health$INDUSCLASS)
+for (i in 1:2000)
+{
+  #if (is.na(health$INDUSCLASS[i]) )
+  if(health$INDUSCLASS[i]=="")
+  {
+    health$INDUSCLASS[i]<- "Others"
+  }
+
+}
+
+health$INDUSCLASS <- as.factor(health$INDUSCLASS)
+class(health$INDUSCLASS)
+
+#Reconfirming missings
+detectmissing(health)
+```
+
+
+We found missing values only in one column i.e. Indusclass and imputated missing with another factor "Others".
+
+For analysis splitting tha data into training and validation set
+
+```{r,echo=FALSE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+#Splitting outpatients data into training and validation set
+# Select rows randomly
+row.number<- sample(1:nrow(OppHealth), size=0.2*nrow(OppHealth))
+
+# Split the data 20-80%
+OppHealth_test<-  OppHealth[row.number,]
+dim(OppHealth_test) ## Size of the testing set
+OppHealth_train<- OppHealth[-row.number,]
+dim(OppHealth_train)  ## Size of the training set
+
+```
+
+
+
+Now looking at the statistics of each variable
+
+#### Continous Variable Analysis
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+#Summarizing each variable
+attach(OppHealth_train)
+
+#Statistics of continous variables
+describe(AGE)
+describe(famsize)
+describe(COUNTOP)
+describe(EXPENDOP)
+
+
+par(mfrow=c(2, 2))
+boxplot(AGE,main="Age")
+boxplot(famsize,main="Family Size")
+boxplot(COUNTOP,main="Out Patients#")
+boxplot(EXPENDOP,main="Out Patients Expenditure")
+
+hist(AGE,main="Age", col=3)
+hist(famsize,main="Family Size",col = 3)
+hist(COUNTOP,main="Out Patients#", col = 3)
+hist(EXPENDOP,main="Out Patients Expenditure", col=3)
+
+par(mfrow=c(2, 2))
+qqnorm(AGE, main = "AGE  Q-Q Plot",xlab = "Theoretical Quantiles", ylab = "Sample Quantiles",plot.it = TRUE, datax = FALSE)
+qqline(AGE,col=2)
+qqnorm(famsize, main = "Family Size  Q-Q Plot",xlab = "Theoretical Quantiles", ylab = "Sample Quantiles",plot.it = TRUE, datax = FALSE)
+qqline(famsize,col=2)
+qqnorm(COUNTOP, main = "Expenditure Count Q-Q Plot",xlab = "Theoretical Quantiles", ylab = "Sample Quantiles",plot.it = TRUE, datax = FALSE)
+qqline(COUNTOP,col=2)
+qqnorm(EXPENDOP, main = "Expenditure Normal Q-Q Plot",xlab = "Theoretical Quantiles", ylab = "Sample Quantiles",plot.it = TRUE, datax = FALSE)
+qqline(EXPENDOP,col=2)
+
+```
+
+
+We can observe followings for the four continous variable viz box plot and histogram plots:
+
+1. Age is distributed symmetrically around mean age of 40 with no outliers
+2. Mean family size is 3, 50% population have family size between 1 to 3 and rest 50% between 4 to 7, rest are outliers lying out of whiskers. This making its histogram __*right skewed*__.
+3. Mean count of out patients is 8 and most of the count is within 13 but outliers making it highly right skewed.
+4. Mean out patients expenditure is 1.8K and most of the expenditure is within 5K but outliers making it highly right skewed.
+
+
+####Categorical Variable Analysis
+
+Below are the frequency plots of categorical variable
+
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+
+#CDA
+par(mfrow=c(2, 2))
+barplot(table(REGION),main="Region", col=5)
+barplot(table(RACE),main="Race",col=5)
+barplot(table(EDUC),main="Education", col=5)
+barplot(table(INCOME),main="Income", col=5)
+par(mfrow=c(2, 2))
+barplot(table(MARISTAT),main="Marital Status", col=5)
+barplot(table(PHSTAT),main="Physical State", col=5)
+barplot(table(INDUSCLASS),main="Industry", col=5)
+
+# Box plot against expenditure 
+par(mfrow=c(2, 2))
+boxplot(EXPENDOP~REGION,main="Region wise expenditure")
+boxplot(EXPENDOP~RACE,main="Race wise expenditure")
+boxplot(EXPENDOP~EDUC,main="Education wise expenditure")
+boxplot(EXPENDOP~INCOME,main="Income wise Expenditure")
+
+par(mfrow=c(2, 2))
+boxplot(EXPENDOP~MARISTAT,main="Maritalstatus wise Expenditure")
+boxplot(EXPENDOP~PHSTAT,main="Physical Status wise Expenditure")
+boxplot(EXPENDOP~INDUSCLASS,main="Indusclass wise Expenditure")
+
+```
+
+From above plots for categorical variables, we can observe that:
+
+1. __Region:__ Most of the population is from *South* region and every region is influenced by outliers basis of expenditure
+
+2. __Race:__ In our data majority are *White* people which is influenced by outliers
+
+3. __Industry:__ Industry of majority of population is unknown hence we imputated with "opthers".
+
+4. __Education:__ Most of people are highschool dropout and outliers influencing their expenditure.
+
+5. __Marital Status:__ In our data majority are married people which are also influenced by outliers.
+
+6. __Physical State:__ Most of the people are in good physical state and outliers are present.
+
+7. __Income:__ Most of the people are high or medium income and outliers are present.
+
+####Binary Variable Analysis
+
+Below are the self explanatory frequency charts for each binary variable
+
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+#Frequency Table for Binary Variables
+
+table(UNEMPLOY)
+par(mfrow=c(2, 2))
+barplot(table(GENDER), names.arg = c("Male","Female"),col = c("blue","red"),main = "Gender")
+barplot(table(ANYLIMIT),names.arg = c("No","Yes"),col = c("blue","red"), main="Any Activity Limitation")
+barplot(table(COLLEGE),names.arg = c("No","Yes"),col = c("blue","red"), main ="College or HIgher Degree")
+barplot(table(HIGHSCH),names.arg = c("No","Yes"),col = c("blue","red"),main="High SChool Degree")
+par(mfrow=c(2, 2))
+barplot(table(MNHPOOR),names.arg = c("Good/Excellent","Fair/Poor"),col = c("blue","red"), main="Mental Health")
+barplot(table(insure),names.arg = c("No","Yes"),col = c("blue","red"), main="Insurance Coverage")
+barplot(table(USC),names.arg = c("Satisfied","Dissatisfied"),col = c("blue","red"), main="Source of care")
+barplot(table(UNEMPLOY),names.arg = c("Employed","Unemployed"),col = c("blue","red"),main="Employment Status")
+barplot(table(MANAGEDCARE),names.arg = c("Not enrolled","HMO enrolled"),col = c("blue","red"),main="Managed Care")
+```
+
+
+#### Correlation Analysis by plotting scatterplot and correlation matrix
+
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+#pairwise scatterplot after removing binary variables
+pwdata<- subset(OppHealth_train,select = -c(GENDER,ANYLIMIT,COLLEGE,HIGHSCH,MNHPOOR,insure,USC,UNEMPLOY,MANAGEDCARE))
+pairs(pwdata)
+
+#correlation between continous variables
+library(corrplot)
+d<- subset(OppHealth_train, select = c(AGE,famsize,COUNTOP,EXPENDOP))
+d1<- cor(d)
+
+corPlot(d)
+corrplot(d1,method="number")
+
+```
+
+Combining all three plots it clear there is pairwise collinearity only between countop and expendop which implies that count of out pateints is expected to be significant in explaining outpatients expenditure.  
+
+###Regression Analysis
+
+We began with a sinple linear regression with __*EXPENDOP*__ as dependent variable and rest others as independent variables and ran our first model with following results.
+
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+
+model.fit1<- lm(EXPENDOP~AGE+factor(ANYLIMIT)+factor(COLLEGE)+factor(HIGHSCH)+factor(GENDER)+factor(MNHPOOR)+factor(insure)+factor(USC)+factor(UNEMPLOY)+factor(MANAGEDCARE)+famsize+COUNTOP+RACE+REGION+EDUC+MARISTAT+INCOME+PHSTAT+INDUSCLASS, data=OppHealth_train)
+summary(model.fit1)
+```
+
+From this model only 41% of variablity in out patients expenditure could be explained, also there is difference of __2%__ in R sq and adjusted R square which indicates that this model includes some insignificant inpendent variables, hence could be improved further.
+
+Also we can see that AGE,COUNTOP,RACE(black & native) are highly significant in explaining DV, next comes REGION(norteast, south, west) and physical state(Poor) and INSURE is very less reponsible in explaining our DV. However rest of the variables are not significant.
+
+Before improving this model with checked for our dependent variable.
+
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+library(ggplot2) 
+dat <- data.frame(x = OppHealth_train$EXPENDOP) 
+ggplot(dat, aes(x=OppHealth_train$EXPENDOP)) + geom_density(fill="violet")
+
+
+dat <- data.frame(x = log(OppHealth_train$EXPENDOP)) 
+ggplot(dat, aes(x=log(OppHealth_train$EXPENDOP))) + geom_density(fill="violet")
+
+norm<-rnorm(1082, mean=mean(OppHealth_train$EXPENDOP), sd=sd(OppHealth_train$EXPENDOP)) 
+dat <- data.frame(cond = factor(rep(c("EXPENDOP","Normal"), each=1082)), 
+                  x = c(OppHealth_train$EXPENDOP,norm)) 
+ggplot(dat, aes(x, fill=cond)) + geom_density(alpha=.3)
+
+
+lnorm<-rnorm(1082, mean=mean(log(OppHealth_train$EXPENDOP)), sd=sd(log(OppHealth_train$EXPENDOP)))
+dat <- data.frame(cond = factor(rep(c("LMEDV","Normal"), each=1082)),
+                  x = c(log(OppHealth_train$EXPENDOP),lnorm))
+ggplot(dat, aes(x, fill=cond)) + geom_density(alpha=.3)
+
+```
+From very first it is clear that DV is highly right skewed, same we observed in our earlier exploratory analysis as well, in order to remove skewness we tranformed it in logarithm and can be seen that after tranformation DV is normally distributed.
+In all our next fitted model we will use __*LOG(EXPENDOP)*__ as dependent variable(DV).
+
+We ran our next improved model
+
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+model.fit2<- lm(log(EXPENDOP)~AGE+factor(ANYLIMIT)+factor(COLLEGE)+factor(HIGHSCH)+factor(GENDER)+factor(MNHPOOR)+factor(insure)+factor(USC)+factor(UNEMPLOY)+factor(MANAGEDCARE)+famsize+COUNTOP+RACE+REGION+EDUC+MARISTAT+INCOME+PHSTAT+INDUSCLASS, data=OppHealth_train)
+summary(model.fit2)
+```
+ Though R sq dropped by 4% but significance of independent variables has changed, __family size, usc, income and all physical state__ which were considered insignificant in the first model are seemed significant now and going as per intuition also.
+ 
+###Checking Multicollinearity
+ 
+ Before further improvement we checked for __Multicollinearity__ in this model.
+ From out pairwise scatter plot it was clear that none of the variables are correlated with each other and plots are completely scattered. However, to be assured that our model is free from multicollinearity we performed statistics test __*VIF*__.
+ If VIF = 1 no correlation, 3<VIF<8 moderate correlation, VIF>8 highly correlated.
+ 
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+vif( lm(log(EXPENDOP)~AGE+factor(ANYLIMIT)+factor(COLLEGE)+factor(HIGHSCH)+factor(GENDER)+factor(MNHPOOR)+factor(insure)+factor(USC)+factor(UNEMPLOY)+factor(MANAGEDCARE)+famsize+COUNTOP+RACE+REGION+MARISTAT+INCOME+PHSTAT+INDUSCLASS, data=OppHealth_train))
+```
+
+As we can see all VIF are either 1 or 2 hence there is no collinearity in our model.
+
+#### Parsimonious Modelling 
+
+As we have seen in our last model that all the regressors are not significant, hence we should be selecting only significant variables, for this we have used
+* Forward Selection
+* Backward Selection
+* Step Selection
+
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+model.base<- lm(log(EXPENDOP)~AGE, data = OppHealth_train)
+#Forward Selection
+step(model.base, scope = list(upper=model.fit2, lower~1), direction = "forward",trace = FALSE)
+#Backward Selection
+step(model.fit2, direction ="backward", trace=FALSE)
+#Stepwise Selection-Both
+step(model.base, scope = list(upper=model.fit2, lower~1), direction = "both", trace = FALSE)
+```
+
+We got same results from all three selections, also we have found these regressors significant in our first model as well, hence we will fit next model only with resulted 10 regressors.
+
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+model.fit3<- lm(log(EXPENDOP)~AGE+COUNTOP+famsize+factor(insure)+factor(GENDER)+factor(ANYLIMIT)+factor(USC)+PHSTAT+RACE+INCOME, data=OppHealth_train)
+summary(model.fit3)
+```
+
+###Residual Analysis of model.fit3
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+
+
+res1<- studres(model.fit3)
+hist(res1,freq=FALSE, main="Distribution of Studentized Residuals")
+xfit<-seq(min(res1),max(res1),length=40) 
+yfit<-dnorm(xfit) 
+lines(xfit, yfit)
+
+library(car)
+
+residualPlot(model.fit3, id.n=5)
+residualPlots(model.fit3,id.n=3)
+
+```
+We can see that residuals are not normally distributed hence contradicting one of our basic assumption in linear regression.
+Also from regressor vs residuals plot we can see that plot for __COUNTOP__ is skewed and also posses some quadratic relation. Hence we need to transform COUNTOP 
+COUNTOP- log(COUNTOP)
+
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+model.fit4<- lm(log(EXPENDOP)~AGE+log(COUNTOP)+famsize+factor(insure)+factor(GENDER)+factor(ANYLIMIT)+factor(USC)+PHSTAT+RACE+INCOME, data=OppHealth_train)
+summary(model.fit4)
+```
+
+__We can see drastic improvement in R sq of 20% almost, also R sq and adjusted R sq are same.__
+We will further analyse the residuals of this model.
+
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+res2<- studres(model.fit4)
+hist(res2,freq=FALSE, main="Distribution of Studentized Residuals")
+xfit<-seq(min(res2),max(res2),length=40) 
+yfit<-dnorm(xfit) 
+lines(xfit, yfit)
+
+library(car)
+residualPlot(model.fit4, id.n=5)
+residualPlots(model.fit4,id.n=3)
+
+model.fit5<- lm(log(EXPENDOP)~AGE+log(COUNTOP)+I(log(COUNTOP)*log(COUNTOP))+famsize+factor(insure)+factor(GENDER)+factor(ANYLIMIT)+factor(USC)+PHSTAT+RACE+INCOME, data=OppHealth_train)
+summary(model.fit5)
+
+```
+We tried transforming log(COUTNOP) to capture its small quadtratic relation but do not found any significant improvement inthe model, hence till now our best model is __model.fit4__.
+
+####Checking Autocorrelation
+
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+res3<-residuals(model.fit4)
+acf(res3)
+library(lmtest)
+dwtest(model.fit4, alt="two.sided")
+```
+From __ACF__ plot we can see autocorrelation at __lag1__, also after performing __Durbin Watson Test__ p values is less than 0.05 which is confrming autocorrelation at lag1.
+
+In order to remove autocorrelation we will introduce __EXPENDOP__ lagged variable by 1 i.e.lag_EXPENDOP. 
+
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+#Handling auto correlation
+#creating laf 1 variable for expendop
+lag_EXPENDOP<- c(0)
+for(i in 2:nrow(OppHealth_train))
+{
+  lag_EXPENDOP[i]<- OppHealth_train$EXPENDOP[i-1]
+}
+OppHealth_train<- cbind(OppHealth_train,lag_EXPENDOP)
+model.fit5<- lm(log(EXPENDOP)~lag_EXPENDOP+AGE+log(COUNTOP)+famsize+factor(insure)+factor(GENDER)+factor(ANYLIMIT)+factor(USC)+PHSTAT+RACE+INCOME, data=OppHealth_train)
+summary(model.fit5)
+res3<- residuals(model.fit5)
+residualPlot(model.fit5, id.n=5)
+residualPlots(model.fit5,id.n=3)
+```
+We can see skewness in scatter plot of lagged variable hence we will transform it in logarithm.
+
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+Llag_EXPENDOP<- c(0)
+for(i in 2:nrow(OppHealth_train))
+  Llag_EXPENDOP[i]<- log(OppHealth_train$lag_EXPENDOP[i])
+
+OppHealth_train<- cbind(OppHealth_train,Llag_EXPENDOP)
+model.fit6<- lm(log(EXPENDOP)~Llag_EXPENDOP+AGE+log(COUNTOP)+famsize+factor(insure)+factor(GENDER)+factor(ANYLIMIT)+factor(USC)+PHSTAT+RACE+INCOME, data=OppHealth_train)
+summary(model.fit6)
+res4<- residuals(model.fit6)
+residualPlot(model.fit6, id.n=5)
+residualPlots(model.fit6,id.n=3)
+```
+
+####Checking Hetrosedascticity
+From residual vs fitted scatter plot we can little quadtratic relationship, also can sense some hetrosedascticity since variance of some residuals is significantly different from others.We will perform statistic test to check for hetrosedasticity i.e __*Breuch Pagan Test*__
+
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+#testing hetroscedasticity
+bptest(model.fit6)
+```
+Since p value is less sthan 0.05 it suggests hetrosedasticity, we will perform __*BOX COX transformation*__ to remove hetrosedasticity.
+
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+#Remedy of hetroscedasticity
+#BOX COX transformation
+bc<- boxcox(lm(log(EXPENDOP)~Llag_EXPENDOP+AGE+log(COUNTOP)+famsize+factor(insure)+factor(GENDER)+factor(ANYLIMIT)+factor(USC)+PHSTAT+RACE+INCOME, data=OppHealth_train))
+which.max(bc$y)
+lambda<-bc$x[which.max(bc$y)]
+lambda
+model.fit7<-lm(I(log(EXPENDOP)^1.8)~Llag_EXPENDOP+AGE+log(COUNTOP)+famsize+factor(insure)+factor(GENDER)+factor(ANYLIMIT)+factor(USC)+PHSTAT+RACE+INCOME,data=OppHealth_train)
+summary(model.fit7)
+
+residualPlot(model.fit7, id.n=5)
+#testing hetroscedasticity
+#bptest(model.fit7)
+```
+From residual vs fitted graph we can now observe straight line hence confirming linearity of our regression and also confirming homosedascticity in our new model __model.fit7__
+
+
+#### Checking normalization of residuals
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+res7<- studres(model.fit7)
+hist(res7,freq=FALSE, main="Distribution of Studentized Residuals")
+xfit<-seq(min(res7),max(res7),length=40) 
+yfit<-dnorm(xfit) 
+lines(xfit, yfit)
+qqPlot(model.fit7)
+```
+
+From both the plots we can see that residuals are mostly normally distributed however somewhat rightly skewed because of some outliers might be.
+
+#### Outliers Detection
+
+We will detect outliers using cook's distance method
+
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+cutoff <- 4/((nrow(OppHealth_train)-length(model.fit7$coefficients)-2))
+plot(model.fit7, which=4, cook.levels=cutoff)
+```
+
+
+We found some outliers in our model, we will remove them and refit the model on training data 
+
+```{r,echo=FALSE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+#Removing ouliers
+newophealth<- OppHealth_train[-c(51,709,1672),]
+#nrow(OppHealth_train)
+#nrow(newophealth)
+#Refine Final
+detach(OppHealth_train)
+attach(newophealth)
+model.final<-lm(I(log(EXPENDOP)^1.8)~Llag_EXPENDOP+AGE+log(COUNTOP)+famsize+factor(insure)+factor(GENDER)+factor(ANYLIMIT)+factor(USC)+PHSTAT+RACE+INCOME,data=OppHealth_train)
+#summary(model.final)
+```
+
+#### Testing final model 
+
+We tested our final model using __PRESS__ statistics
+
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+library(qpcR) 
+PRESS(model.final)$P.square
+```
+
+__Sine the obtaind PRESS statistics is very less. By definition of PRESS, we seem to have a good model.__
+
+##### Fitting model on full data
+
+```{r,echo=TRUE, warning=FALSE, error=FALSE, message=FALSE, tidy=TRUE, comment="##"}
+detach(newophealth)
+attach(OppHealth)
+Lllag_EXPENDOP<- c(0)
+for(i in 2:nrow(OppHealth))
+{
+  Lllag_EXPENDOP[i]<- log(OppHealth$EXPENDOP[i-1])
+}
+
+
+m<-lm(I(log(EXPENDOP)^1.8)~Lllag_EXPENDOP+AGE+log(COUNTOP)+famsize+factor(insure)+factor(GENDER)+factor(ANYLIMIT)+factor(USC)+PHSTAT+RACE+INCOME, data=OppHealth)
+
+summary(m)
+
+qqPlot(m)
+```
+
+### Conclusion
+
+From our best model we were able to explain only 60%, lots more left to be explained.
+However, we could say that age, number of times person was a out patient, whether he has any health coverage or not are playing important in deciding his health expenditure as a outpatient. Apart from these factors gender, physical state, race and income can also decide to some extent variablity in expenditure.
+
+We might need more data to capture more variablity in the expenditure.
+
